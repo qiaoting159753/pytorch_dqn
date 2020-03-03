@@ -18,22 +18,22 @@ class Q_Net(nn.Module):
 	def __init__(self):
 		super(Q_Net, self).__init__()
 		# Tensors, with weight and bias.
-		self.conv1 = nn.Conv2d(1, 8, 5)
+		self.conv1 = nn.Conv2d(3, 8, 5)
 		self.pool1 = nn.MaxPool2d(2, 2, 1)
 		self.conv2 = nn.Conv2d(8, 8, 5)
 		self.pool2 = nn.MaxPool2d(2, 2, 1)
 		self.conv3 = nn.Conv2d(8, 8, 5)
 		self.pool3 = nn.MaxPool2d(2, 2, 1)
-		self.fc1 = nn.Linear(8512, 512)
+		self.fc1 = nn.Linear(4176, 512)
 		self.fc2 = nn.Linear(512, 512)
-		self.fc3 = nn.Linear(512, 10)
+		self.fc3 = nn.Linear(512, 7)
 
 	def forward(self, x1):
 		# Flows
 		x1 = self.pool1(F.relu(self.conv1(x1)))
 		x1 = self.pool2(F.relu(self.conv2(x1)))
 		x1 = self.pool3(F.relu(self.conv3(x1)))
-		x1 = x1.view(-1, 8512)
+		x1 = x1.view(-1, 4176)
 		x1 = F.relu(self.fc1(x1))
 		x1 = F.relu(self.fc2(x1))
 		x1 = self.fc3(x1)
@@ -60,7 +60,7 @@ class DQN():
 			value, indices = q_values.max(1)
 			action = indices.cpu().detach().numpy()
 		else:
-			action = random.randint(0, 9)
+			action = random.randint(0, 6)
 		return action
 
 	def learn(self, states, actions, rewards):

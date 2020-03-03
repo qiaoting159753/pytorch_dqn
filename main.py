@@ -8,14 +8,11 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 def main():
     env = gym.make('Assault-v0')
-    n_latent_var = 64
-    delta_epsilon = 0.0001
-
-    agent = DQN(env.reset().shape[0], 3, n_latent_var, delta_epsilon).to(device)
+    agent = DQN()
 
     max_episodes = 5000
-    max_steps = 500
-    time_steps = 100
+    max_steps = 300
+    time_steps = 50
 
     st_rd = []
 
@@ -25,22 +22,24 @@ def main():
         rewards = []
         is_terminals = []
         state = env.reset()
+        state = state.reshape(3, 250, 160)
         states.append(state)
 
         for i_step in range(max_steps):
             action = agent.act(state)
             state, reward, done, info = env.step(action)
+            state = state.reshape(3, 250, 160)
             states.append(state)
             actions.append(action)
             rewards.append(reward)
             is_terminals.append(done)
 
             if i_step % time_steps == 0:
-                agent.learn(states, actions, rewards, is_terminals)
+                agent.learn(states, actions, rewards)
 
             if done:
                 break
-        agent.learn(states, actions, rewards, is_terminals)
+        agent.learn(states, actions, rewards)
 
         # For evaluation
         np_rds = np.asarray(rewards)
