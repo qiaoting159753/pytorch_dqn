@@ -1,10 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Spyder Editor
-
-This is a temporary script file.
-"""
-from __future__ import division
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -13,9 +6,8 @@ import numpy as np
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-
 class Q_Net(nn.Module):
-	def __init__(self):
+	def __init__(self, action_dims):
 		super(Q_Net, self).__init__()
 		# Tensors, with weight and bias.
 		self.conv1 = nn.Conv2d(3, 8, 5)
@@ -26,7 +18,8 @@ class Q_Net(nn.Module):
 		self.pool3 = nn.MaxPool2d(2, 2, 1)
 		self.fc1 = nn.Linear(4176, 512)
 		self.fc2 = nn.Linear(512, 512)
-		self.fc3 = nn.Linear(512, 7)
+		self.fc3_q = nn.Linear(512, action_dims)
+		self.fc3_v = nn.Linear(512, 1)
 
 	def forward(self, x1):
 		# Flows
@@ -36,14 +29,16 @@ class Q_Net(nn.Module):
 		x1 = x1.view(-1, 4176)
 		x1 = F.relu(self.fc1(x1))
 		x1 = F.relu(self.fc2(x1))
-		x1 = self.fc3(x1)
+		q1 = self.fc3_q(x1)
+		v1 = self.fc3_v(x1)
+		x1 = q1 + v1
 		return x1
 
-
 class DQN():
-	def __init__(self, delta_epsilon=0.002):
-		self.q_value = Q_Net().to(device)
-		self.q_value_next = Q_Net().to(device)
+	def __init__(self, action_dims, delta_epsilon=0.0001):
+		self.action_dims = action_dims
+		self.q_value = Q_Net(action_dims).to(device)
+		self.q_value_next = Q_Net(action_dims).to(device)
 		self.delta_epsilon = delta_epsilon
 		self.epsilon = 0.01
 		self.MseLoss = nn.MSELoss()
@@ -60,7 +55,7 @@ class DQN():
 			value, indices = q_values.max(1)
 			action = indices.cpu().detach().numpy()
 		else:
-			action = random.randint(0, 6)
+			action = random.randint(0, self.action_dims-1)
 		return action
 
 	def learn(self, states, actions, rewards):
@@ -72,8 +67,12 @@ class DQN():
 		q_curr = self.q_value(states)
 		q_next_value, q_next_indices = q_next.max(1)
 
-		td = rewards + 0.95 * q_next_value
+		print(rewards)
+		print(q_curr)
+		print(actions.unsqueeze(1))
 
+		td = rewards + 0.98 * q_next_value
+		print(td)
 		loss = self.MseLoss(q_curr.gather(1, actions.unsqueeze(1)).squeeze(), td)
 		self.optimizer.zero_grad()
 		loss.mean().backward()
@@ -81,4 +80,3 @@ class DQN():
 
 		self.q_value_next.load_state_dict(self.q_value.state_dict())
 		self.epsilon += self.delta_epsilon
-
