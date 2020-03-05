@@ -1,235 +1,348 @@
-import torch
+import torch.nn.functional as F
 import torch.nn as nn
-from torch.distributions import Categorical
+import torch
 import gym
+import numpy as np
+import cv2
+import torch.optim as optim
+from torch.multiprocessing import Pipe, Process
+from collections import deque
+from torch.distributions.categorical import Categorical
 
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+def make_train_data(reward, done, value, next_value):
+	num_step = len(reward)
+	discounted_return = np.empty([num_step])
+
+	use_gae = True
+	use_standardization = False
+	gamma = 0.99
+	lam = 0.95
+	stable_eps = 1e-30
+
+	# Discounted Return
+	if use_gae:
+		gae = 0
+		for t in range(num_step - 1, -1, -1):
+			delta = reward[t] + gamma * \
+			        next_value[t] * (1 - done[t]) - value[t]
+			gae = delta + gamma * lam * (1 - done[t]) * gae
+
+			discounted_return[t] = gae + value[t]
+
+		# For Actor
+		adv = discounted_return - value
+
+	else:
+		for t in range(num_step - 1, -1, -1):
+			running_add = reward[t] + gamma * next_value[t] * (1 - done[t])
+			discounted_return[t] = running_add
+
+		# For Actor
+		adv = discounted_return - value
+
+	if use_standardization:
+		adv = (adv - adv.mean()) / (adv.std() + stable_eps)
+
+	return discounted_return, adv
 
 
-class Memory:
+class CnnActorCriticNetwork(nn.Module):
 	def __init__(self):
-		self.actions = []
-		self.states = []
-		self.logprobs = []
-		self.rewards = []
-		self.is_terminals = []
+		super(CnnActorCriticNetwork, self).__init__()
+		self.conv1 = nn.Conv2d(4, 32, 8, stride=4)
+		self.conv2 = nn.Conv2d(32, 64, 4, stride=2)
+		self.conv3 = nn.Conv2d(64, 64, 3, stride=1)
+		self.fc1 = nn.Linear(7 * 7 * 64, 512)
+		self.fc2 = nn.Linear(512, 512)
 
-	def clear_memory(self):
-		del self.actions[:]
-		del self.states[:]
-		del self.logprobs[:]
-		del self.rewards[:]
-		del self.is_terminals[:]
+		self.actor = nn.Linear(512, 3)
+		self.critic = nn.Linear(512, 1)
 
-
-class ActorCritic(nn.Module):
-	def __init__(self, action_dim, n_latent_var):
-		super(ActorCritic, self).__init__()
-
-		self.action_layer_conv = nn.Sequential(
-			nn.Conv2d(3, 8, 5),
-			nn.ReLU(),
-			nn.MaxPool2d(2, 2, 1),
-			nn.Conv2d(8, 8, 5),
-			nn.ReLU(),
-			nn.MaxPool2d(2, 2, 1),
-			nn.Conv2d(8, 8, 5),
-			nn.ReLU(),
-			nn.MaxPool2d(2, 2, 1),
-		)
-
-		self.value_layer_conv = nn.Sequential(
-			nn.Conv2d(3, 8, 5),
-			nn.ReLU(),
-			nn.MaxPool2d(2, 2, 1),
-			nn.Conv2d(8, 8, 5),
-			nn.ReLU(),
-			nn.MaxPool2d(2, 2, 1),
-			nn.Conv2d(8, 8, 5),
-			nn.ReLU(),
-			nn.MaxPool2d(2, 2, 1),
-		)
-
-		# actor
-		self.action_layer = nn.Sequential(
-			nn.Linear(4176, n_latent_var),
-			nn.Tanh(),
-			nn.Linear(n_latent_var, action_dim),
-			nn.Softmax(dim=-1)
-		)
-
-		# critic
-		self.value_layer = nn.Sequential(
-			nn.Linear(4176, n_latent_var),
-			nn.Tanh(),
-			nn.Linear(n_latent_var, 1)
-		)
-
-	def forward(self):
-		raise NotImplementedError
-
-	def act(self, state, memory):
-		state = torch.from_numpy(state).float().to(device)
-		state = state.unsqueeze(0)
-		temp = self.action_layer_conv(state)
-		temp = temp.view([-1, 4176])
-		action_probs = self.action_layer(temp)
-		dist = Categorical(action_probs)
-		action = dist.sample()
-
-		state = state.squeeze()
-		memory.states.append(state)
-		memory.actions.append(action)
-		memory.logprobs.append(dist.log_prob(action))
-
-		return action.item()
-
-	def evaluate(self, state, action):
-		temp = self.action_layer_conv(state)
-		temp = temp.view([-1, 4176])
-		action_probs = self.action_layer(temp)
-
-		dist = Categorical(action_probs)
-
-		action_logprobs = dist.log_prob(action)
-		dist_entropy = dist.entropy()
-
-		temp = self.value_layer_conv(state)
-		temp = temp.view([-1, 4176])
-		state_value = self.value_layer(temp)
-
-		return action_logprobs, torch.squeeze(state_value), dist_entropy
+	def forward(self, x):
+		x = F.relu(self.conv1(x))
+		x = F.relu(self.conv2(x))
+		x = F.relu(self.conv3(x))
+		x = x.view(-1, 7 * 7 * 64)
+		x = F.relu(self.fc1(x))
+		x = F.relu(self.fc2(x))
+		policy = self.actor(x)
+		value = self.critic(x)
+		return policy, value
 
 
-class PPO:
-	def __init__(self, action_dim, n_latent_var, lr, betas, gamma, K_epochs, eps_clip):
-		self.lr = lr
-		self.betas = betas
+class CNNActorAgent(object):
+	def __init__(
+			self,
+			num_step,
+			gamma=0.99,
+			lam=0.95,
+			use_gae=True,
+			use_cuda=False):
+		self.model = CnnActorCriticNetwork()
+		self.num_step = num_step
 		self.gamma = gamma
-		self.eps_clip = eps_clip
-		self.K_epochs = K_epochs
+		self.lam = lam
+		self.use_gae = use_gae
+		self.learning_rate = 0.00025
+		self.epoch = 3
+		self.clip_grad_norm = 0.5
+		self.ppo_eps = 0.1
+		self.batch_size = 32
 
-		self.policy = ActorCritic(action_dim, n_latent_var).to(device)
-		self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=lr, betas=betas)
-		self.policy_old = ActorCritic(action_dim, n_latent_var).to(device)
-		self.policy_old.load_state_dict(self.policy.state_dict())
+		self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
 
-		self.MseLoss = nn.MSELoss()
+		self.device = torch.device('cuda' if use_cuda else 'cpu')
 
-	def update(self, memory):
-		# Monte Carlo estimate of state rewards:
-		rewards = []
-		discounted_reward = 0
-		for reward, is_terminal in zip(reversed(memory.rewards), reversed(memory.is_terminals)):
-			if is_terminal:
-				discounted_reward = 0
-			discounted_reward = reward + (self.gamma * discounted_reward)
-			rewards.insert(0, discounted_reward)
+		self.model = self.model.to(self.device)
 
-		# Normalizing the rewards:
-		rewards = torch.tensor(rewards).to(device)
-		rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-5)
+	def get_action(self, state):
+		state = torch.Tensor(state).to(self.device)
+		state = state.float()
+		policy, value = self.model(state)
+		policy = F.softmax(policy, dim=-1).data.cpu().numpy()
+		action = self.random_choice_prob_index(policy)
+		return action
 
-		# convert list to tensor
-		old_states = torch.stack(memory.states).to(device).detach()
-		old_actions = torch.stack(memory.actions).to(device).detach()
-		old_logprobs = torch.stack(memory.logprobs).to(device).detach()
+	@staticmethod
+	def random_choice_prob_index(p, axis=1):
+		r = np.expand_dims(np.random.rand(p.shape[1 - axis]), axis=axis)
+		return (p.cumsum(axis=axis) > r).argmax(axis=axis)
 
-		# Optimize policy for K epochs:
-		for _ in range(self.K_epochs):
-			# Evaluating old actions and values :
-			logprobs, state_values, dist_entropy = self.policy.evaluate(old_states, old_actions)
+	def forward_transition(self, state, next_state):
+		state = torch.from_numpy(state).to(self.device)
+		state = state.float()
+		policy, value = self.model(state)
+		next_state = torch.from_numpy(next_state).to(self.device)
+		next_state = next_state.float()
+		_, next_value = self.model(next_state)
+		value = value.data.cpu().numpy().squeeze()
+		next_value = next_value.data.cpu().numpy().squeeze()
+		return value, next_value, policy
 
-			# Finding the ratio (pi_theta / pi_theta__old):
-			ratios = torch.exp(logprobs - old_logprobs.detach())
+	def train_model(self, s_batch, target_batch, y_batch, adv_batch):
+		s_batch = torch.FloatTensor(s_batch).to(self.device)
+		target_batch = torch.FloatTensor(target_batch).to(self.device)
+		y_batch = torch.LongTensor(y_batch).to(self.device)
+		adv_batch = torch.FloatTensor(adv_batch).to(self.device)
+		sample_range = np.arange(len(s_batch))
+		with torch.no_grad():
+			policy_old, value_old = self.model(s_batch)
+			m_old = Categorical(F.softmax(policy_old, dim=-1))
+			log_prob_old = m_old.log_prob(y_batch)
 
-			# Finding Surrogate Loss:
-			advantages = rewards - state_values.detach()
-			surr1 = ratios * advantages
-			surr2 = torch.clamp(ratios, 1 - self.eps_clip, 1 + self.eps_clip) * advantages
-			loss = -torch.min(surr1, surr2) + 0.5 * self.MseLoss(state_values, rewards) - 0.01 * dist_entropy
+		for i in range(self.epoch):
+			np.random.shuffle(sample_range)
+			for j in range(int(len(s_batch) / self.batch_size)):
+				sample_idx = sample_range[self.batch_size * j:self.batch_size * (j + 1)]
+				policy, value = self.model(s_batch[sample_idx])
+				m = Categorical(F.softmax(policy, dim=-1))
+				log_prob = m.log_prob(y_batch[sample_idx])
+				ratio = torch.exp(log_prob - log_prob_old[sample_idx])
+				surr1 = ratio * adv_batch[sample_idx]
+				surr2 = torch.clamp(ratio, 1.0 - self.ppo_eps, 1.0 + self.ppo_eps) * adv_batch[sample_idx]
+				actor_loss = -torch.min(surr1, surr2).mean()
+				critic_loss = F.mse_loss(value.sum(1), target_batch[sample_idx])
+				self.optimizer.zero_grad()
+				loss = actor_loss + critic_loss
+				loss.backward()
+				torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_grad_norm)
+				self.optimizer.step()
 
-			# take gradient step
-			self.optimizer.zero_grad()
-			loss.mean().backward()
-			self.optimizer.step()
 
-		# Copy new weights into old policy:
-		self.policy_old.load_state_dict(self.policy.state_dict())
+class Environment(Process):
+	def __init__(
+			self,
+			is_render,
+			env_idx,
+			child_conn):
+		super(Environment, self).__init__()
+		self.daemon = True
+		self.env = gym.make('BreakoutDeterministic-v4')
+		self.is_render = is_render
+		self.env_idx = env_idx
+		self.steps = 0
+		self.episode = 0
+		self.rall = 0
+		self.recent_rlist = deque(maxlen=100)
+		self.child_conn = child_conn
 
+		self.history = np.zeros([4, 84, 84])
 
-def main():
-	############## Hyperparameters ##############
-	env_name = "Assault-v0"
-	# creating environment
-	env = gym.make(env_name)
-	state_dim = env.observation_space.shape[0]
-	action_dim = 7
-	render = False
-	log_interval = 20  # print avg reward in the interval
-	max_episodes = 50000  # max training episodes
-	max_timesteps = 1000  # max timesteps in one episode
-	n_latent_var = 64  # number of variables in hidden layer
-	update_timestep = 80  # update policy every n timesteps
-	lr = 0.002
-	betas = (0.9, 0.999)
-	gamma = 0.99  # discount factor
-	K_epochs = 4  # update policy for K epochs
-	eps_clip = 0.2  # clip parameter for PPO
-	random_seed = None
-	#############################################
+		self.reset()
+		self.lives = self.env.env.ale.lives()
 
-	if random_seed:
-		torch.manual_seed(random_seed)
-		env.seed(random_seed)
+	def run(self):
+		super(Environment, self).run()
+		while True:
+			action = self.child_conn.recv()
+			if self.is_render:
+				self.env.render()
 
-	memory = Memory()
-	ppo = PPO(action_dim, n_latent_var, lr, betas, gamma, K_epochs, eps_clip)
-	print(lr, betas)
+			_, reward, done, info = self.env.step(action + 1)
 
-	# logging variables
-	running_reward = 0
-	avg_length = 0
-	timestep = 0
+			if True:
+				if self.lives > info['ale.lives'] and info['ale.lives'] > 0:
+					force_done = True
+					self.lives = info['ale.lives']
+				else:
+					force_done = done
+			else:
+				force_done = done
 
-	# training loop
-	for i_episode in range(1, max_episodes + 1):
-		state = env.reset()
-		state = state.reshape([3, 250, 160])
-		for t in range(max_timesteps):
-			timestep += 1
+			if force_done:
+				reward = -1
 
-			# Running policy_old:
-			action = ppo.policy_old.act(state, memory)
-			state, reward, done, _ = env.step(action)
-			state = state.reshape([3, 250, 160])
-			# Saving reward and is_terminal:
-			memory.rewards.append(reward)
-			memory.is_terminals.append(done)
+			self.history[:3, :, :] = self.history[1:, :, :]
+			self.history[3, :, :] = self.pre_proc(
+				self.env.env.ale.getScreenGrayscale().squeeze().astype('float32'))
 
-			# update if its time
-			if timestep % update_timestep == 0:
-				ppo.update(memory)
-				memory.clear_memory()
-				timestep = 0
+			self.rall += reward
+			self.steps += 1
 
-			running_reward += reward
-			if render:
-				env.render()
 			if done:
-				break
+				self.history = self.reset()
 
-		avg_length += t
+			self.child_conn.send(
+				[self.history[:, :, :], reward, force_done, done])
 
-		# logging
-		if i_episode % log_interval == 0:
-			avg_length = int(avg_length / log_interval)
-			running_reward = int((running_reward / log_interval))
+	def reset(self):
+		self.steps = 0
+		self.episode += 1
+		self.rall = 0
+		self.env.reset()
+		self.lives = self.env.env.ale.lives()
+		self.get_init_state(
+			self.env.env.ale.getScreenGrayscale().squeeze().astype('float32'))
+		return self.history[:, :, :]
 
-			print('Episode {} \t avg length: {} \t reward: {}'.format(i_episode, avg_length, running_reward))
-			running_reward = 0
-			avg_length = 0
+	def pre_proc(self, X):
+		x = cv2.resize(X, (84, 84))
+		x *= (1.0 / 255.0)
+
+		return x
+
+	def get_init_state(self, s):
+		for i in range(4):
+			self.history[i, :, :] = self.pre_proc(s)
 
 
 if __name__ == '__main__':
-	main()
+	use_cuda = True
+	use_gae = True
+	is_load_model = False
+	is_render = False
+	use_standardization = True
+	lr_schedule = False
+	life_done = True
+	use_noisy_net = True
+
+	num_worker = 4
+
+	num_step = 64
+	ppo_eps = 0.1
+	epoch = 3
+	batch_size = 32
+	max_step = 1.15e8
+
+	learning_rate = 0.00025
+
+	stable_eps = 1e-30
+	epslion = 0.1
+	entropy_coef = 0.01
+	alpha = 0.99
+	gamma = 0.99
+	clip_grad_norm = 0.5
+
+	agent = CNNActorAgent(
+		num_step,
+		gamma,
+		use_cuda=use_cuda,
+		use_gae=use_gae)
+
+	works = []
+	parent_conns = []
+	child_conns = []
+	for idx in range(num_worker):
+		parent_conn, child_conn = Pipe()
+		work = Environment(is_render, idx, child_conn)
+		work.start()
+		works.append(work)
+		parent_conns.append(parent_conn)
+		child_conns.append(child_conn)
+
+	states = np.zeros([num_worker, 4, 84, 84])
+
+	sample_episode = 0
+	sample_rall = 0
+	sample_step = 0
+	sample_env_idx = 0
+	global_step = 0
+	recent_prob = deque(maxlen=10)
+	score = 0
+
+	while True:
+		total_state, total_reward, total_done, total_next_state, total_action = [], [], [], [], []
+		global_step += (num_worker * num_step)
+
+		for _ in range(num_step):
+			actions = agent.get_action(states)
+
+			for parent_conn, action in zip(parent_conns, actions):
+				parent_conn.send(action)
+
+			next_states, rewards, dones, real_dones = [], [], [], []
+			for parent_conn in parent_conns:
+				s, r, d, rd = parent_conn.recv()
+				next_states.append(s)
+				rewards.append(r)
+				dones.append(d)
+				real_dones.append(rd)
+
+			score += rewards[sample_env_idx]
+			next_states = np.stack(next_states)
+			rewards = np.hstack(rewards)
+			dones = np.hstack(dones)
+			real_dones = np.hstack(real_dones)
+
+			total_state.append(states)
+			total_next_state.append(next_states)
+			total_reward.append(rewards)
+			total_done.append(dones)
+			total_action.append(actions)
+
+			states = next_states[:, :, :, :]
+
+			if real_dones[sample_env_idx]:
+				sample_episode += 1
+				if sample_episode < 1000:
+					print('episodes:', sample_episode, '| score:', score)
+					score = 0
+
+		total_state = np.stack(total_state).transpose(
+			[1, 0, 2, 3, 4]).reshape([-1, 4, 84, 84])
+		total_next_state = np.stack(total_next_state).transpose(
+			[1, 0, 2, 3, 4]).reshape([-1, 4, 84, 84])
+		total_reward = np.stack(total_reward).transpose().reshape([-1])
+		total_action = np.stack(total_action).transpose().reshape([-1])
+		total_done = np.stack(total_done).transpose().reshape([-1])
+
+		value, next_value, policy = agent.forward_transition(
+			total_state, total_next_state)
+		total_target = []
+		total_adv = []
+		for idx in range(num_worker):
+			target, adv = make_train_data(total_reward[idx * num_step:(idx + 1) * num_step],
+			                              total_done[idx * num_step:(idx + 1) * num_step],
+			                              value[idx * num_step:(idx + 1) * num_step],
+			                              next_value[idx * num_step:(idx + 1) * num_step])
+			# print(target.shape)
+			total_target.append(target)
+			total_adv.append(adv)
+
+		print('training')
+		agent.train_model(
+			total_state,
+			np.hstack(total_target),
+			total_action,
+			np.hstack(total_adv))

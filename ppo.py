@@ -8,9 +8,9 @@ import numpy as np
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-class policy_net(nn.Module):
+class two_heads_net(nn.Module):
 	def __init__(self, action_dims):
-		super(policy_net, self).__init__()
+		super(two_heads_net, self).__init__()
 		#Tensors, with weight and bias.
 		self.conv1 = nn.Conv2d(3, 8, 5)
 		self.pool1 = nn.MaxPool2d(2, 2, 1)
@@ -18,9 +18,12 @@ class policy_net(nn.Module):
 		self.pool2 = nn.MaxPool2d(2, 2, 1)
 		self.conv3 = nn.Conv2d(8, 8, 5)
 		self.pool3 = nn.MaxPool2d(2, 2, 1)
-		self.fc1 = nn.Linear(4176, 512)
-		self.fc2 = nn.Linear(512, 512)
-		self.fc3 = nn.Linear(512, action_dims)
+		self.fc1_policy = nn.Linear(4176, 512)
+		self.fc2_policy = nn.Linear(512, 512)
+		self.fc3_policy = nn.Linear(512, action_dims)
+		self.fc1_value = nn.Linear(4176, 512)
+		self.fc2_value = nn.Linear(512, 512)
+		self.fc3_value = nn.Linear(512, 1)
 
 	def forward(self, x1):
 		#Flows
@@ -28,65 +31,38 @@ class policy_net(nn.Module):
 		x1 = self.pool2(F.relu(self.conv2(x1)))
 		x1 = self.pool3(F.relu(self.conv3(x1)))
 		x1 = x1.view(-1, 4176)
-		x1 = F.relu(self.fc1(x1))
-		x1 = F.relu(self.fc2(x1))
-		x1 = self.fc3(x1)
-		x1 = F.softmax(x1, dim=1)
-		return x1
 
-class value_net(nn.Module):
-	def __init__(self):
-		super(value_net, self).__init__()
-		#Tensors, with weight and bias.
-		self.conv1 = nn.Conv2d(3, 8, 5)
-		self.pool1 = nn.MaxPool2d(2, 2, 1)
-		self.conv2 = nn.Conv2d(8, 8, 5)
-		self.pool2 = nn.MaxPool2d(2, 2, 1)
-		self.conv3 = nn.Conv2d(8, 8, 5)
-		self.pool3 = nn.MaxPool2d(2, 2, 1)
-		self.fc1 = nn.Linear(4176, 512)
-		self.fc2 = nn.Linear(512, 512)
-		self.fc3 = nn.Linear(512, 1)
+		x1_policy = F.relu(self.fc1_policy(x1))
+		x1_policy = F.relu(self.fc2_policy(x1_policy))
+		x1_policy = F.softmax(self.fc3_policy(x1_policy), dim=1)
 
-	def forward(self, x1):
-		#Flows
-		x1 = self.pool1(F.relu(self.conv1(x1)))
-		x1 = self.pool2(F.relu(self.conv2(x1)))
-		x1 = self.pool3(F.relu(self.conv3(x1)))
-		x1 = x1.view(-1, 4176)
-		x1 = F.relu(self.fc1(x1))
-		x1 = F.relu(self.fc2(x1))
-		x1 = (self.fc3(x1))
-		return x1
+		x1_value = F.relu(self.fc1_value(x1))
+		x1_value = F.relu(self.fc2_value(x1_value))
+		x1_value = (self.fc3_value(x1_value))
+		return x1_policy, x1_value
 
 class PPOTrain:
 	def __init__(self, state_dims, action_dims):
 		self.state_dims = state_dims
-		self.policy = policy_net(action_dims).to(device)
-		self.value = value_net().to(device)
-		self.old_policy = policy_net(action_dims).to(device)
-		self.old_value = value_net().to(device)
-		self.actor_optimizer = optim.Adam(self.policy.parameters(), lr=0.0001)
-		self.critic_optimizer = optim.Adam(self.value.parameters(), lr=0.0001)
+		self.network = two_heads_net(action_dims).to(device)
+		self.old_network = two_heads_net(action_dims).to(device)
+		self.optimizer = optim.Adam(self.network.parameters(), lr=0.0001)
 		self.mse_loss = nn.MSELoss()
 
 	def get_value(self, next):
 		obs = torch.Tensor(next).to(device)
-		values = self.value(obs)
+		_, values = self.network.forward(obs)
 		return values.cpu().detach().numpy()
 
 	def act(self, obs):
-		new_obs = np.asarray(obs)
-		new_obs = np.expand_dims(new_obs, axis=0)
-		obs = torch.Tensor(new_obs).to(device)
-		#Action
-		probs = self.policy(obs)
+		obs = torch.Tensor(obs).to(device)
+		obs = obs.unsqueeze(0)
+		probs, value = self.network.forward(obs)
 		m = Categorical(probs)
 		action = m.sample()
 		action = action.cpu().numpy()
 		#value
-		value = self.value(obs).cpu()
-		value = value.detach().numpy()
+		value = value.cpu().detach().numpy()
 		return action, value
 
 	def get_gaes(self, rewards, v_preds, v_preds_next):
@@ -113,11 +89,11 @@ class PPOTrain:
 			sample_indices = np.random.randint(low=0, high=observations.shape[0]-1,
 											   size=8)  # indices are in [low, high)
 			sampled_inp = [np.take(a=a, indices=sample_indices, axis=0) for a in inp]  # sample training data
-			sampled_obs=sampled_inp[0]
-			sampled_actions=sampled_inp[1]
-			sampled_rewards=sampled_inp[2]
-			sampled_v_preds_next=sampled_inp[3]
-			sampled_gaes=sampled_inp[4]
+			sampled_obs = sampled_inp[0]
+			sampled_actions = sampled_inp[1]
+			sampled_rewards = sampled_inp[2]
+			sampled_v_preds_next = sampled_inp[3]
+			sampled_gaes = sampled_inp[4]
 			clip_value = 0.2
 			#Evaluate
 			sampled_obs = torch.Tensor(sampled_obs).float().to(device)
@@ -126,19 +102,15 @@ class PPOTrain:
 			sampled_v_preds_next = torch.Tensor(sampled_v_preds_next).float().to(device)
 			sampled_gaes = torch.Tensor(sampled_gaes).float().to(device)
 
-			act_probs = self.policy(sampled_obs)
-			act_probs_old = self.old_policy(sampled_obs)
+			act_probs, sampled_v_preds = self.network(sampled_obs)
+			act_probs_old, _ = self.old_network(sampled_obs)
+			act_probs_old = act_probs_old.detach()
 			act_dists = Categorical(act_probs)
 			act_dists_old = Categorical(act_probs_old)
 			logprobs = act_dists.log_prob(sampled_actions)
 			old_logprobs = act_dists_old.log_prob(sampled_actions)
-
-			sampled_v_preds = self.value(sampled_obs)
 			sampled_v_preds = torch.squeeze(sampled_v_preds)
-
-			#Update the value first by TDE
-			td = sampled_rewards + 0.95 * sampled_v_preds_next
-			loss_vf = self.mse_loss(td, sampled_v_preds)
+			#sampled_rewards = (sampled_rewards - sampled_rewards.mean()) / (sampled_rewards.std() + 1e-5)
 
 			# Update the policy
 			ratios = torch.exp(logprobs - old_logprobs.detach())
@@ -146,17 +118,16 @@ class PPOTrain:
 			cliped_ratio = torch.clamp(ratios, 1 - clip_value, 1 + clip_value)
 			surr2 = cliped_ratio * sampled_gaes
 
+			#Update the value first by TDE
+			td = sampled_rewards + 0.95 * sampled_v_preds_next
+			loss_vf = self.mse_loss(td, sampled_v_preds)
 			#Entropy
 			dist_entropy = act_dists.entropy()
-			loss = -torch.min(surr1, surr2) - 0.0001 * dist_entropy
 
-			self.actor_optimizer.zero_grad()
+			loss = -torch.min(surr1, surr2) + 0.5 * loss_vf
+
+			self.optimizer.zero_grad()
 			loss.mean().backward()
-			self.actor_optimizer.step()
+			self.optimizer.step()
 
-			self.critic_optimizer.zero_grad()
-			loss_vf.backward()
-			self.critic_optimizer.step()
-
-		self.old_policy.load_state_dict(self.policy.state_dict())
-		self.old_value.load_state_dict(self.value.state_dict())
+		self.old_network.load_state_dict(self.network.state_dict())

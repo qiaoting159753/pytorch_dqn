@@ -7,7 +7,6 @@ import gym
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-
 class TwoHeadNetwork(nn.Module):
 	def __init__(self, input_dim, output_dim):
 		super(TwoHeadNetwork, self).__init__()
@@ -23,18 +22,14 @@ class TwoHeadNetwork(nn.Module):
 		value = self.value2(value)
 		return logits, value
 
-
 class A2CAgent():
 	def __init__(self, env, gamma, lr):
 		self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
 		self.env = env
 		self.obs_dim = env.observation_space.shape[0]
 		self.action_dim = env.action_space.n
-
 		self.gamma = gamma
 		self.lr = lr
-
 		self.model = TwoHeadNetwork(self.obs_dim, self.action_dim).to(device)
 		self.optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
 
@@ -94,7 +89,6 @@ gamma = 0.99
 
 agent = A2CAgent(env, gamma, lr)
 
-
 def run():
 	for episode in range(MAX_EPISODE):
 		state = env.reset()
@@ -113,6 +107,5 @@ def run():
 		if episode % 10 == 0:
 			print("Episode " + str(episode) + ": " + str(episode_reward))
 		agent.update(trajectory)
-
 
 run()

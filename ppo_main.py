@@ -28,6 +28,7 @@ def main():
         for i_step in range(max_steps):
             action, value = agent.act(state)
             state, reward, done, info = env.step(action[0])
+            print(reward)
             total_rewards += reward
             state = state.reshape(3, 250, 160)
             state = state / 255
@@ -46,9 +47,9 @@ def main():
         np_rds = sum(np_rds)
         st_rd.append(np_rds)
 
-        if len(st_rd) > 50:
+        if len(st_rd) > 10:
             rdsss = np.asarray(st_rd)
-            print(sum(rdsss[len(st_rd) - 50:len(st_rd) - 1])/50)
+            print(sum(rdsss[len(st_rd) - 10:len(st_rd) - 1])/10)
 
 if __name__ == '__main__':
     main()
