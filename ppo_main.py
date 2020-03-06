@@ -7,8 +7,8 @@ import numpy as np
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 def main():
-    env = gym.make('Assault-v0')
-    agent = PPOTrain([3, 250, 160], 7)
+    env = gym.make('Breakout-v0')
+    agent = PPOTrain([3, 210, 160], 4)
     max_episodes = 5000
     max_steps = 600
     st_rd = []
@@ -19,7 +19,7 @@ def main():
         rewards = []
         values = []
         state = env.reset()
-        state = state.reshape(3, 250, 160)
+        state = state.reshape(3, 210, 160)
         state = state / 255
         states.append(state)
 
@@ -28,9 +28,8 @@ def main():
         for i_step in range(max_steps):
             action, value = agent.act(state)
             state, reward, done, info = env.step(action[0])
-            print(reward)
             total_rewards += reward
-            state = state.reshape(3, 250, 160)
+            state = state.reshape(3, 210, 160)
             state = state / 255
             states.append(state)
             actions.append(action)

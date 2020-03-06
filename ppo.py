@@ -12,33 +12,24 @@ class two_heads_net(nn.Module):
 	def __init__(self, action_dims):
 		super(two_heads_net, self).__init__()
 		#Tensors, with weight and bias.
-		self.conv1 = nn.Conv2d(3, 8, 5)
-		self.pool1 = nn.MaxPool2d(2, 2, 1)
-		self.conv2 = nn.Conv2d(8, 8, 5)
-		self.pool2 = nn.MaxPool2d(2, 2, 1)
-		self.conv3 = nn.Conv2d(8, 8, 5)
-		self.pool3 = nn.MaxPool2d(2, 2, 1)
-		self.fc1_policy = nn.Linear(4176, 512)
-		self.fc2_policy = nn.Linear(512, 512)
-		self.fc3_policy = nn.Linear(512, action_dims)
-		self.fc1_value = nn.Linear(4176, 512)
-		self.fc2_value = nn.Linear(512, 512)
-		self.fc3_value = nn.Linear(512, 1)
+		self.conv1 = nn.Conv2d(3, 8, 5, stride=2)
+		self.conv2 = nn.Conv2d(8, 8, 5, stride=2)
+		self.conv3 = nn.Conv2d(8, 8, 5, stride=2)
+		self.fc1 = nn.Linear(3128, 256)
+		self.fc2 = nn.Linear(256, 256)
+		self.fc3_policy = nn.Linear(256, action_dims)
+		self.fc3_value = nn.Linear(256, 1)
 
 	def forward(self, x1):
 		#Flows
-		x1 = self.pool1(F.relu(self.conv1(x1)))
-		x1 = self.pool2(F.relu(self.conv2(x1)))
-		x1 = self.pool3(F.relu(self.conv3(x1)))
-		x1 = x1.view(-1, 4176)
-
-		x1_policy = F.relu(self.fc1_policy(x1))
-		x1_policy = F.relu(self.fc2_policy(x1_policy))
-		x1_policy = F.softmax(self.fc3_policy(x1_policy), dim=1)
-
-		x1_value = F.relu(self.fc1_value(x1))
-		x1_value = F.relu(self.fc2_value(x1_value))
-		x1_value = (self.fc3_value(x1_value))
+		x1 = (F.relu(self.conv1(x1)))
+		x1 = (F.relu(self.conv2(x1)))
+		x1 = (F.relu(self.conv3(x1)))
+		x1 = x1.view(-1, 3128)
+		x1 = F.relu(self.fc1(x1))
+		x1 = F.relu(self.fc2(x1))
+		x1_policy = F.softmax(self.fc3_policy(x1), dim=1)
+		x1_value = self.fc3_value(x1)
 		return x1_policy, x1_value
 
 class PPOTrain:
@@ -46,7 +37,7 @@ class PPOTrain:
 		self.state_dims = state_dims
 		self.network = two_heads_net(action_dims).to(device)
 		self.old_network = two_heads_net(action_dims).to(device)
-		self.optimizer = optim.Adam(self.network.parameters(), lr=0.0001)
+		self.optimizer = optim.Adam(self.network.parameters(), lr=0.001)
 		self.mse_loss = nn.MSELoss()
 
 	def get_value(self, next):
@@ -60,15 +51,12 @@ class PPOTrain:
 		probs, value = self.network.forward(obs)
 		m = Categorical(probs)
 		action = m.sample()
-		action = action.cpu().numpy()
-		#value
-		value = value.cpu().detach().numpy()
 		return action, value
 
 	def get_gaes(self, rewards, v_preds, v_preds_next):
 		deltas = [r_t + 0.95 * v_next - v for r_t, v_next, v in zip(rewards, v_preds_next, v_preds)]
 		# calculate generative advantage estimator(lambda = 1), see ppo paper eq(11)
-		gaes = copy.deepcopy(deltas)
+		gaes = (deltas)
 		for t in reversed(range(len(gaes) - 1)):  # is T-1, where T is time step which run policy
 			gaes[t] = gaes[t] + 0.95 * gaes[t + 1]
 		gaes = np.array(gaes).astype(dtype=np.float32)

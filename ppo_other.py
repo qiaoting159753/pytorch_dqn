@@ -9,7 +9,6 @@ from torch.multiprocessing import Pipe, Process
 from collections import deque
 from torch.distributions.categorical import Categorical
 
-
 def make_train_data(reward, done, value, next_value):
 	num_step = len(reward)
 	discounted_return = np.empty([num_step])
@@ -45,6 +44,40 @@ def make_train_data(reward, done, value, next_value):
 		adv = (adv - adv.mean()) / (adv.std() + stable_eps)
 
 	return discounted_return, adv
+
+
+# class CnnActorCriticNetwork(nn.Module):
+# 	def __init__(self, action_dims = 3):
+# 		super(CnnActorCriticNetwork, self).__init__()
+# 		#Tensors, with weight and bias.
+# 		self.conv1 = nn.Conv2d(4, 8, 5)
+# 		self.pool1 = nn.MaxPool2d(2, 2, 1)
+# 		self.conv2 = nn.Conv2d(8, 8, 5)
+# 		self.pool2 = nn.MaxPool2d(2, 2, 1)
+# 		self.conv3 = nn.Conv2d(8, 8, 5)
+# 		self.pool3 = nn.MaxPool2d(2, 2, 1)
+# 		self.fc1 = nn.Linear(4176, 512)
+# 		self.fc2 = nn.Linear(512, 512)
+# 		self.fc3_actor = nn.Linear(512,action_dims)
+# 		self.fc3_value = nn.Linear(512, 1)
+#
+# 	def forward(self, x1):
+# 		#Flows
+# 		x1 = self.pool1(F.relu(self.conv1(x1)))
+# 		x1 = self.pool2(F.relu(self.conv2(x1)))
+# 		x1 = self.pool3(F.relu(self.conv3(x1)))
+# 		x1 = x1.view(-1, 4176)
+# 		x1 = F.relu(self.fc1(x1))
+# 		x1 = F.relu(self.fc2(x1))
+#
+# 		x1_policy = F.softmax(self.fc3_actor(x1), dim=1)
+#
+# 		x1_value = F.relu(self.fc1_value(x1))
+# 		x1_value = F.relu(self.fc2_value(x1_value))
+# 		x1_value = (self.fc3_value(x1_value))
+# 		return x1_policy, x1_value
+
+
 
 
 class CnnActorCriticNetwork(nn.Module):
@@ -151,11 +184,7 @@ class CNNActorAgent(object):
 
 
 class Environment(Process):
-	def __init__(
-			self,
-			is_render,
-			env_idx,
-			child_conn):
+	def __init__(self,is_render,env_idx,child_conn):
 		super(Environment, self).__init__()
 		self.daemon = True
 		self.env = gym.make('BreakoutDeterministic-v4')
@@ -239,7 +268,7 @@ if __name__ == '__main__':
 
 	num_worker = 4
 
-	num_step = 64
+	num_step = 128
 	ppo_eps = 0.1
 	epoch = 3
 	batch_size = 32
