@@ -10,7 +10,9 @@ def main():
     env = gym.make('Breakout-v0')
     agent = A2C([3, 210, 160], 4)
     max_episodes = 5000
-    max_steps = 10
+    max_steps = 500
+
+    st_rd = []
 
     for i_episode in range(max_episodes):
         actions = []
@@ -27,7 +29,7 @@ def main():
         total_rewards = 0
 
         for i_step in range(max_steps):
-            (action, value, log, entropy) = agent.act(state)
+            action, value, log, entropy = agent.act(state)
             state, reward, done, info = env.step(action[0])
             total_rewards += reward
             state = state.reshape(3, 210, 160)
@@ -42,21 +44,17 @@ def main():
 
             if done:
                 break
-
-        #Compute GAE
         agent.train(states, actions, rewards, values, logs, entropies)
-        # print("Total: " + str(total_rewards/i_step))
-        # v_preds_next = values[1:] + [0]
-        # agent.train(states, actions, rewards, values, v_preds_next)
+        print("Total: " + str(total_rewards/i_step))
 
-        # For evaluation
-        # np_rds = np.asarray(rewards)
-        # np_rds = sum(np_rds)
-        # st_rd.append(np_rds)
-        #
-        # if len(st_rd) > 10:
-        #     rdsss = np.asarray(st_rd)
-        #     print(sum(rdsss[len(st_rd) - 10:len(st_rd) - 1])/10)
+        #For evaluation
+        np_rds = np.asarray(rewards)
+        np_rds = sum(np_rds)
+        st_rd.append(np_rds)
+
+        if len(st_rd) > 10:
+            rdsss = np.asarray(st_rd)
+            print(sum(rdsss[len(st_rd) - 10:len(st_rd) - 1])/10)
 
 if __name__ == '__main__':
     main()

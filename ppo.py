@@ -58,7 +58,7 @@ class PPOTrain:
 		# calculate generative advantage estimator(lambda = 1), see ppo paper eq(11)
 		gaes = (deltas)
 		for t in reversed(range(len(gaes) - 1)):  # is T-1, where T is time step which run policy
-			gaes[t] = gaes[t] + 0.95 * gaes[t + 1]
+			gaes[t] = deltas[t] + 0.95 * gaes[t + 1]
 		gaes = np.array(gaes).astype(dtype=np.float32)
 		gaes = (gaes - gaes.mean()) / (gaes.std() + 1e-5)
 		return gaes
