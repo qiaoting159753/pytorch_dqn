@@ -62,9 +62,7 @@ def main():
                 break
         agent.train(states, rewards, values, logs, entropies)
         #For evaluation
-        np_rds = np.asarray(rewards)
-        np_rds = sum(np_rds)
-        st_rd.append(np_rds)
+        st_rd.append(total_rewards)
 
         if len(st_rd) > 10:
             rdsss = np.asarray(st_rd)
