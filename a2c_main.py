@@ -15,8 +15,8 @@ def preprocess(state):
 
 def main():
     env = gym.make('PongDeterministic-v4')
-    print env.action_space
-    print env.reset().shape
+    print(env.action_space)
+    print(env.reset().shape)
 
     agent = A2C([1, 210, 160], 6)
     max_episodes = 5000
@@ -24,6 +24,7 @@ def main():
     timesteps = 64
 
     st_rd = []
+    total_steps = 0
 
     for i_episode in range(max_episodes):
         actions = []
@@ -64,10 +65,13 @@ def main():
 
             if done:
                 break
+
+        total_steps += i_step
         agent.train(states, rewards, values, logs, entropies)
         #For evaluation
         st_rd.append(total_rewards)
 
+        print(total_steps)
         if len(st_rd) > 10:
             rdsss = np.asarray(st_rd)
             print(sum(rdsss[len(st_rd) - 10:len(st_rd) - 1])/10)
