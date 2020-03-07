@@ -18,6 +18,7 @@ def main():
     agent = A2C([1, 210, 160], 6)
     max_episodes = 5000
     max_steps = 1000
+    timesteps = 100
 
     st_rd = []
 
@@ -47,10 +48,19 @@ def main():
             logs.append(log)
             entropies.append(entropy)
 
+            if i_step % timesteps == 0:
+                agent.train(states, rewards, values, logs, entropies)
+                actions = []
+                states = []
+                rewards = []
+                values = []
+                logs = []
+                entropies = []
+                states.append(state)
+
             if done:
                 break
         agent.train(states, rewards, values, logs, entropies)
-
         #For evaluation
         np_rds = np.asarray(rewards)
         np_rds = sum(np_rds)
