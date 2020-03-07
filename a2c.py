@@ -8,17 +8,32 @@ import numpy as np
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
+class Two_Heads_FC(nn.Module):
+	def __init__(self, action_dims):
+		super(Two_Heads_FC, self).__init__()
+		self.fc1 = nn.Linear(33600, 256)
+		self.fc2 = nn.Linear(256, 256)
+		self.fc3_value = nn.Linear(256, 1)
+		self.fc3_policy = nn.Linear(256, action_dims)
+
+	def forward(self, x1):
+		x1 = (F.relu(self.fc1(x1)))
+		x1 = (F.relu(self.fc2(x1)))
+		x1_policy = F.softmax(self.fc3_policy(x1), dim=1)
+		x1_value = self.fc3_value(x1)
+		return x1_policy, x1_value
+
 class Two_Heads_Net(nn.Module):
 	def __init__(self, action_dims):
 		super(Two_Heads_Net, self).__init__()
 		# Tensors, with weight and bias.
-		self.conv1 = nn.Conv2d(3, 8, 5, stride=2)
+		self.conv1 = nn.Conv2d(1, 8, 5, stride=2)
 		self.conv2 = nn.Conv2d(8, 8, 5, stride=2)
 		self.conv3 = nn.Conv2d(8, 8, 5, stride=2)
-		self.fc1 = nn.Linear(3128, 256)
-		self.fc2 = nn.Linear(256, 256)
-		self.fc3_policy = nn.Linear(256, action_dims)
-		self.fc3_value = nn.Linear(256, 1)
+		self.fc1 = nn.Linear(3128, 128)
+		self.fc2 = nn.Linear(128, 128)
+		self.fc3_policy = nn.Linear(128, action_dims)
+		self.fc3_value = nn.Linear(128, 1)
 
 	def forward(self, x1):
 		# Flows
@@ -37,7 +52,7 @@ class A2C:
 	def __init__(self, state_dims, action_dims):
 		self.state_dims = state_dims
 		self.network = Two_Heads_Net(action_dims).to(device)
-		self.optimizer = optim.Adam(self.network.parameters(), lr=0.001)
+		self.optimizer = optim.Adam(self.network.parameters(), lr=0.0001)
 
 	def act(self, obs):
 		obs = torch.Tensor(obs).to(device)
@@ -45,8 +60,10 @@ class A2C:
 		probs, value = self.network.forward(obs)
 		dist = Categorical(probs)
 		action = dist.sample()
+		log = dist.log_prob(action)
+		action = action.cpu().numpy()[0]
 		value = value.detach().cpu().numpy()
-		return (action, value, dist.log_prob(action), dist.entropy())
+		return action, value, log, dist.entropy()
 
 	def get_gaes(self, rewards, v_preds):
 		v_preds_next = v_preds[1:] + [0]
@@ -62,7 +79,7 @@ class A2C:
 		gaes = (gaes - gaes.mean()) / (gaes.std() + 1e-5)
 		return gaes
 
-	def train(self, states, actions, rewards, values, logs, entropies):
+	def train(self, states, rewards, values, logs, entropies):
 		gaes = self.get_gaes(rewards, values)
 		gaes = torch.from_numpy(np.asarray(gaes)).float().to(device)
 		gaes = gaes.unsqueeze(1)
@@ -73,11 +90,11 @@ class A2C:
 		value_loss = advantage.pow(2).mean()
 
 		logs = torch.stack(logs)
-		policy_loss = (- logs * advantage.detach()).mean()
+		policy_loss = (logs * advantage.detach()).mean()
 
 		entropies = torch.stack(entropies).mean()
 
-		loss = policy_loss + 0.5 * value_loss - 0.001 * entropies
+		loss = -policy_loss + 0.5 * value_loss - 0.001 * entropies
 
 		self.optimizer.zero_grad()
 		loss.backward(retain_graph=False)

@@ -3,12 +3,13 @@ import gym
 from a2c import A2C
 import torch
 import numpy as np
+from skimage.color import rgb2grey
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 def main():
-    env = gym.make('Breakout-v0')
-    agent = A2C([3, 210, 160], 4)
+    env = gym.make('Pong-v0')
+    agent = A2C([1, 210, 160], 6)
     max_episodes = 5000
     max_steps = 500
 
@@ -23,29 +24,30 @@ def main():
         entropies = []
 
         state = env.reset()
-        state = state.reshape(3, 210, 160)
-        state = state / 255
+        state = rgb2grey(state)
+        state = state.reshape([1, 210, 160])
+        state /= 255
         states.append(state)
         total_rewards = 0
 
         for i_step in range(max_steps):
+            #value is detached.
             action, value, log, entropy = agent.act(state)
-            state, reward, done, info = env.step(action[0])
+            state, reward, done, info = env.step(action)
             total_rewards += reward
-            state = state.reshape(3, 210, 160)
-            state = state / 255
-
+            state = rgb2grey(state)
+            state = state.reshape(1, 210, 160)
+            state /= 255
             states.append(state)
             actions.append(action)
             rewards.append(reward)
-            values.append(value[0,0])
+            values.append(value[0, 0])
             logs.append(log)
             entropies.append(entropy)
 
             if done:
                 break
-        agent.train(states, actions, rewards, values, logs, entropies)
-        print("Total: " + str(total_rewards/i_step))
+        agent.train(states, rewards, values, logs, entropies)
 
         #For evaluation
         np_rds = np.asarray(rewards)

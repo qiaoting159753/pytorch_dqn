@@ -67,12 +67,8 @@ class DQN():
 		q_curr = self.q_value(states)
 		q_next_value, q_next_indices = q_next.max(1)
 
-		print(rewards)
-		print(q_curr)
-		print(actions.unsqueeze(1))
-
 		td = rewards + 0.98 * q_next_value
-		print(td)
+		# Double Dueling Q Learning
 		loss = self.MseLoss(q_curr.gather(1, actions.unsqueeze(1)).squeeze(), td)
 		self.optimizer.zero_grad()
 		loss.mean().backward()
