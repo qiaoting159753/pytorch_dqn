@@ -7,11 +7,17 @@ from skimage.color import rgb2grey
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
+def preprocess(state):
+    state = rgb2grey(state)
+    state = state.reshape([1, 210, 160])
+    state /= 255
+    return state
+
 def main():
     env = gym.make('Pong-v0')
     agent = A2C([1, 210, 160], 6)
     max_episodes = 5000
-    max_steps = 500
+    max_steps = 1000
 
     st_rd = []
 
@@ -24,9 +30,7 @@ def main():
         entropies = []
 
         state = env.reset()
-        state = rgb2grey(state)
-        state = state.reshape([1, 210, 160])
-        state /= 255
+        state = preprocess(state)
         states.append(state)
         total_rewards = 0
 
@@ -34,10 +38,8 @@ def main():
             #value is detached.
             action, value, log, entropy = agent.act(state)
             state, reward, done, info = env.step(action)
+            state = preprocess(state)
             total_rewards += reward
-            state = rgb2grey(state)
-            state = state.reshape(1, 210, 160)
-            state /= 255
             states.append(state)
             actions.append(action)
             rewards.append(reward)
