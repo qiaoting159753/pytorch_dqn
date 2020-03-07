@@ -10,15 +10,18 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 def preprocess(state):
     state = rgb2grey(state)
     state = state.reshape([1, 210, 160])
-    state /= 255
+    #state /= 255
     return state
 
 def main():
-    env = gym.make('Pong-v0')
+    env = gym.make('PongDeterministic-v4')
+    print env.action_space
+    print env.reset().shape
+
     agent = A2C([1, 210, 160], 6)
     max_episodes = 5000
     max_steps = 1000
-    timesteps = 100
+    timesteps = 64
 
     st_rd = []
 
@@ -41,6 +44,7 @@ def main():
             state, reward, done, info = env.step(action)
             state = preprocess(state)
             total_rewards += reward
+
             states.append(state)
             actions.append(action)
             rewards.append(reward)

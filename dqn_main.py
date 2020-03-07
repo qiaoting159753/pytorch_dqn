@@ -10,7 +10,7 @@ def main():
     env = gym.make('Assault-v0')
     agent = DQN(7)
     max_episodes = 5000
-    max_steps = 300
+    max_steps = 1000
     time_steps = 50
     st_rd = []
 
