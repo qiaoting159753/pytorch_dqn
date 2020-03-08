@@ -12,7 +12,7 @@ class two_heads_net(nn.Module):
 	def __init__(self, action_dims):
 		super(two_heads_net, self).__init__()
 		#Tensors, with weight and bias.
-		self.conv1 = nn.Conv2d(3, 8, 5, stride=2)
+		self.conv1 = nn.Conv2d(1, 8, 5, stride=2)
 		self.conv2 = nn.Conv2d(8, 8, 5, stride=2)
 		self.conv3 = nn.Conv2d(8, 8, 5, stride=2)
 		self.fc1 = nn.Linear(3128, 256)
@@ -40,38 +40,38 @@ class PPOTrain:
 		self.optimizer = optim.Adam(self.network.parameters(), lr=0.001)
 		self.mse_loss = nn.MSELoss()
 
-	def get_value(self, next):
-		obs = torch.Tensor(next).to(device)
-		_, values = self.network.forward(obs)
-		return values.cpu().detach().numpy()
-
 	def act(self, obs):
 		obs = torch.Tensor(obs).to(device)
 		obs = obs.unsqueeze(0)
 		probs, value = self.network.forward(obs)
 		m = Categorical(probs)
 		action = m.sample()
-		return action, value
+		log = m.log_prob(action)
+		entropy = m.entropy()
+		value = value.detach().cpu().numpy()
+		return action, value, log, entropy
 
-	def get_gaes(self, rewards, v_preds, v_preds_next):
+	def get_gaes(self, rewards, v_preds):
+		v_preds_next = v_preds[1:] + [0]
 		deltas = [r_t + 0.95 * v_next - v for r_t, v_next, v in zip(rewards, v_preds_next, v_preds)]
 		# calculate generative advantage estimator(lambda = 1), see ppo paper eq(11)
-		gaes = (deltas)
-		for t in reversed(range(len(gaes) - 1)):  # is T-1, where T is time step which run policy
-			gaes[t] = deltas[t] + 0.95 * gaes[t + 1]
+		gaes = copy.deepcopy(deltas)
+		for t in reversed(range(len(rewards) - 1)):  # is T-1, where T is time step which run policy
+			gaes[t] = deltas[t] + 0.98 * gaes[t + 1]
+
 		gaes = np.array(gaes).astype(dtype=np.float32)
 		gaes = (gaes - gaes.mean()) / (gaes.std() + 1e-5)
 		return gaes
 
-	def train(self, states, actions, rewards, values, next_values):
+	def train(self, states, actions, rewards, values):
 		# Get Gae
-		gaes = self.get_gaes(rewards, values, next_values)
+		gaes = self.get_gaes(rewards, values)
 		observations = np.reshape(states, newshape=[-1] + self.state_dims)
 		actions = np.array(actions).astype(dtype=np.int32)
 		rewards = np.array(rewards).astype(dtype=np.float32)
-		v_preds_next = np.array(next_values).astype(dtype=np.float32)
 
-		inp = [observations, actions, rewards, v_preds_next, gaes]
+
+		inp = [observations, actions, rewards, gaes]
 		# train
 		for epoch in range(5):
 			sample_indices = np.random.randint(low=0, high=observations.shape[0]-1,
@@ -109,10 +109,10 @@ class PPOTrain:
 			#Update the value first by TDE
 			td = sampled_rewards + 0.95 * sampled_v_preds_next
 			loss_vf = self.mse_loss(td, sampled_v_preds)
+
 			#Entropy
 			dist_entropy = act_dists.entropy()
-
-			loss = -torch.min(surr1, surr2) + 0.5 * loss_vf
+			loss = -torch.min(surr1, surr2) + 0.5 * loss_vf - 0.001 * dist_entropy
 
 			self.optimizer.zero_grad()
 			loss.mean().backward()
