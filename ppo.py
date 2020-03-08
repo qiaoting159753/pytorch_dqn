@@ -46,10 +46,9 @@ class PPOTrain:
 		probs, value = self.network.forward(obs)
 		m = Categorical(probs)
 		action = m.sample()
-		log = m.log_prob(action)
-		entropy = m.entropy()
 		value = value.detach().cpu().numpy()
-		return action, value, log, entropy
+		action = action.detach().cpu().numpy()[0]
+		return action, value
 
 	def get_gaes(self, rewards, v_preds):
 		v_preds_next = v_preds[1:] + [0]
@@ -58,47 +57,54 @@ class PPOTrain:
 		gaes = copy.deepcopy(deltas)
 		for t in reversed(range(len(rewards) - 1)):  # is T-1, where T is time step which run policy
 			gaes[t] = deltas[t] + 0.98 * gaes[t + 1]
-
 		gaes = np.array(gaes).astype(dtype=np.float32)
 		gaes = (gaes - gaes.mean()) / (gaes.std() + 1e-5)
 		return gaes
 
 	def train(self, states, actions, rewards, values):
 		# Get Gae
+		next_observations = states[1:]
+		observations = states[0:len(states)-1]
+
 		gaes = self.get_gaes(rewards, values)
-		observations = np.reshape(states, newshape=[-1] + self.state_dims)
-		actions = np.array(actions).astype(dtype=np.int32)
+		observations = np.reshape(observations, newshape=[-1] + self.state_dims)
+		next_observations = np.reshape(next_observations, newshape=[-1] + self.state_dims)
 		rewards = np.array(rewards).astype(dtype=np.float32)
+		actions = np.array(actions)
 
-
-		inp = [observations, actions, rewards, gaes]
+		inp = [observations, actions, rewards, gaes, next_observations]
 		# train
-		for epoch in range(5):
-			sample_indices = np.random.randint(low=0, high=observations.shape[0]-1,
-											   size=8)  # indices are in [low, high)
-			sampled_inp = [np.take(a=a, indices=sample_indices, axis=0) for a in inp]  # sample training data
+		for epoch in range(10):
+			sample_indices = np.random.randint(low=0, high=gaes.shape[0]-1, size=64)
+			sampled_inp = [np.take(a=a, indices=sample_indices, axis=0) for a in inp]
+			# Get sampled data
 			sampled_obs = sampled_inp[0]
 			sampled_actions = sampled_inp[1]
 			sampled_rewards = sampled_inp[2]
-			sampled_v_preds_next = sampled_inp[3]
-			sampled_gaes = sampled_inp[4]
+			sampled_gaes = sampled_inp[3]
+			sampled_obs_next = sampled_inp[4]
+
+			# Collected data
 			clip_value = 0.2
-			#Evaluate
 			sampled_obs = torch.Tensor(sampled_obs).float().to(device)
+			sampled_obs_next = torch.Tensor(sampled_obs_next).float().to(device)
 			sampled_actions = torch.Tensor(sampled_actions).long().to(device)
 			sampled_rewards = torch.Tensor(sampled_rewards).float().to(device)
-			sampled_v_preds_next = torch.Tensor(sampled_v_preds_next).float().to(device)
 			sampled_gaes = torch.Tensor(sampled_gaes).float().to(device)
 
+			# Process the observations
 			act_probs, sampled_v_preds = self.network(sampled_obs)
+			act_probs_next, sampled_v_preds_next = self.network(sampled_obs_next)
+
+			# Get the old log probs
 			act_probs_old, _ = self.old_network(sampled_obs)
 			act_probs_old = act_probs_old.detach()
-			act_dists = Categorical(act_probs)
 			act_dists_old = Categorical(act_probs_old)
-			logprobs = act_dists.log_prob(sampled_actions)
 			old_logprobs = act_dists_old.log_prob(sampled_actions)
-			sampled_v_preds = torch.squeeze(sampled_v_preds)
-			#sampled_rewards = (sampled_rewards - sampled_rewards.mean()) / (sampled_rewards.std() + 1e-5)
+
+			# Get corresponding new log probs
+			act_dists = Categorical(act_probs)
+			logprobs = act_dists.log_prob(sampled_actions)
 
 			# Update the policy
 			ratios = torch.exp(logprobs - old_logprobs.detach())
@@ -107,15 +113,16 @@ class PPOTrain:
 			surr2 = cliped_ratio * sampled_gaes
 
 			#Update the value first by TDE
+			sampled_v_preds = torch.squeeze(sampled_v_preds)
+			sampled_v_preds_next = torch.squeeze(sampled_v_preds_next)
 			td = sampled_rewards + 0.95 * sampled_v_preds_next
 			loss_vf = self.mse_loss(td, sampled_v_preds)
-
 			#Entropy
-			dist_entropy = act_dists.entropy()
-			loss = -torch.min(surr1, surr2) + 0.5 * loss_vf - 0.001 * dist_entropy
+			dist_entropy = act_dists.entropy().mean()
 
+			#print(loss_vf.shape)
+			loss = -torch.min(surr1, surr2).mean() + 0.5 * loss_vf - 0.001 * dist_entropy
 			self.optimizer.zero_grad()
 			loss.mean().backward()
 			self.optimizer.step()
-
 		self.old_network.load_state_dict(self.network.state_dict())
