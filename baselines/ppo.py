@@ -120,7 +120,6 @@ class PPOTrain:
 			#Entropy
 			dist_entropy = act_dists.entropy().mean()
 
-			#print(loss_vf.shape)
 			loss = -torch.min(surr1, surr2).mean() + 0.5 * loss_vf - 0.001 * dist_entropy
 			self.optimizer.zero_grad()
 			loss.mean().backward()

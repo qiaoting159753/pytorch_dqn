@@ -1,6 +1,6 @@
 from __future__ import division
 import gym
-from dqn import DQN
+from baselines.dqn import DQN
 import torch
 import numpy as np
 

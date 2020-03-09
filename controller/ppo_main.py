@@ -1,6 +1,6 @@
 from __future__ import division
 import gym
-from a2c import A2C
+from baselines.ppo import PPOTrain
 import torch
 import numpy as np
 from skimage.color import rgb2grey
@@ -10,15 +10,12 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 def preprocess(state):
     state = rgb2grey(state)
     state = state.reshape([1, 210, 160])
-    #state /= 255
+    state /= 255
     return state
 
 def main():
-    env = gym.make('PongDeterministic-v4')
-    print(env.action_space)
-    print(env.reset().shape)
-
-    agent = A2C([1, 210, 160], 6)
+    env = gym.make('Boxing-v0')
+    agent = PPOTrain([1, 210, 160], 18)
     max_episodes = 5000
     max_steps = 1000
     timesteps = 64
@@ -31,8 +28,6 @@ def main():
         states = []
         rewards = []
         values = []
-        logs = []
-        entropies = []
 
         state = env.reset()
         state = preprocess(state)
@@ -41,7 +36,7 @@ def main():
 
         for i_step in range(max_steps):
             #value is detached.
-            action, value, log, entropy = agent.act(state)
+            action, value = agent.act(state)
             state, reward, done, info = env.step(action)
             state = preprocess(state)
             total_rewards += reward
@@ -50,28 +45,23 @@ def main():
             actions.append(action)
             rewards.append(reward)
             values.append(value[0, 0])
-            logs.append(log)
-            entropies.append(entropy)
 
-            if i_step % timesteps == 0:
-                agent.train(states, rewards, values, logs, entropies)
+            if i_step % timesteps == 0 and i_step > 10:
+                agent.train(states, actions, rewards, values)
                 actions = []
                 states = []
                 rewards = []
                 values = []
-                logs = []
-                entropies = []
                 states.append(state)
 
             if done:
                 break
 
         total_steps += i_step
-        agent.train(states, rewards, values, logs, entropies)
+        agent.train(states, actions, rewards, values)
         #For evaluation
         st_rd.append(total_rewards)
-
-        print(total_steps)
+        print(total_rewards)
         if len(st_rd) > 10:
             rdsss = np.asarray(st_rd)
             print(sum(rdsss[len(st_rd) - 10:len(st_rd) - 1])/10)
